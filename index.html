@@ -20,13 +20,19 @@
 
     <div class="max-w-7xl mx-auto space-y-6">
         <!-- Header -->
-        <header class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex justify-between items-center">
+        <header class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-gray-900">우리 동네 아파트 실거래가 대시보드</h1>
                 <p class="text-sm text-gray-500 mt-1">구글 시트 연동 기반 실시간 거래 데이터 분석</p>
             </div>
-            <div id="loadingIndicator" class="text-sm font-semibold text-blue-600 animate-pulse">
-                데이터를 불러오는 중입니다...
+            <div class="flex items-center gap-4 w-full sm:w-auto">
+                <!-- 법정동 필터 드롭다운 -->
+                <select id="dongFilter" class="block w-full sm:w-56 pl-3 pr-8 py-2 text-base border-gray-300 bg-gray-50 text-gray-700 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md border shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <option value="전체">📍 법정동: 전체</option>
+                </select>
+                <div id="loadingIndicator" class="text-sm font-semibold text-blue-600 animate-pulse whitespace-nowrap">
+                    데이터 로딩중...
+                </div>
             </div>
         </header>
 
@@ -92,6 +98,11 @@
         // Data URL
         const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlgvM64OxS1DOn7meUpxs6ryiWV8gXhNsSEZCS3vlrY6TTWAsfZDlvuv2v7dlhuVdxOTTc5CgQ7shj/pub?output=csv';
 
+        // Global State
+        let globalData = [];
+        let uniqueDongs = new Set();
+        let myChart = null;
+
         // Utility: Number formatting with commas
         const formatNumber = (num) => {
             return new Intl.NumberFormat('ko-KR').format(Math.round(num));
@@ -108,26 +119,67 @@
                 header: true,
                 skipEmptyLines: true,
                 complete: function(results) {
-                    const data = results.data;
-                    if(data && data.length > 0) {
-                        document.getElementById('loadingIndicator').innerText = '데이터 로드 완료';
-                        document.getElementById('loadingIndicator').classList.remove('animate-pulse', 'text-blue-600');
-                        document.getElementById('loadingIndicator').classList.add('text-green-600');
+                    // 유효한 데이터만 필터링하여 전역 변수에 저장
+                    globalData = results.data.filter(row => row['거래일자'] && row['아파트명']);
+                    
+                    if(globalData.length > 0) {
+                        const indicator = document.getElementById('loadingIndicator');
+                        indicator.innerText = '데이터 로드 완료';
+                        indicator.classList.remove('animate-pulse', 'text-blue-600');
+                        indicator.classList.add('text-green-600');
                         
-                        setTimeout(() => {
-                            document.getElementById('loadingIndicator').style.display = 'none';
-                        }, 2000);
+                        setTimeout(() => { indicator.style.display = 'none'; }, 2000);
 
-                        processData(data);
+                        // 법정동 고유 목록 추출
+                        globalData.forEach(row => {
+                            if (row['법정동'] && row['법정동'].trim() !== '') {
+                                uniqueDongs.add(row['법정동'].trim());
+                            }
+                        });
+                        
+                        // 필터 초기화 및 전체 데이터 렌더링
+                        initFilter();
+                        processData(globalData);
                     } else {
-                        document.getElementById('loadingIndicator').innerText = '데이터를 찾을 수 없거나 형식 오류입니다.';
-                        document.getElementById('loadingIndicator').classList.replace('text-blue-600', 'text-red-600');
+                        showError('데이터를 찾을 수 없거나 형식 오류입니다.');
                     }
                 },
                 error: function(error) {
                     console.error("CSV Fetch Error:", error);
-                    document.getElementById('loadingIndicator').innerText = '데이터 통신 오류가 발생했습니다.';
-                    document.getElementById('loadingIndicator').classList.replace('text-blue-600', 'text-red-600');
+                    showError('데이터 통신 오류가 발생했습니다.');
+                }
+            });
+        }
+
+        function showError(message) {
+            const indicator = document.getElementById('loadingIndicator');
+            indicator.innerText = message;
+            indicator.classList.replace('text-blue-600', 'text-red-600');
+            indicator.classList.remove('animate-pulse');
+        }
+
+        // 법정동 필터 드롭다운 초기화 로직
+        function initFilter() {
+            const filterEl = document.getElementById('dongFilter');
+            const sortedDongs = Array.from(uniqueDongs).sort();
+            
+            sortedDongs.forEach(dong => {
+                const option = document.createElement('option');
+                option.value = dong;
+                option.textContent = dong;
+                filterEl.appendChild(option);
+            });
+            
+            filterEl.disabled = false; // 데이터 로드 완료 시 활성화
+            
+            // 변경 이벤트 리스너 등록
+            filterEl.addEventListener('change', (e) => {
+                const selectedDong = e.target.value;
+                if (selectedDong === '전체') {
+                    processData(globalData); // 전체 데이터 렌더링
+                } else {
+                    const filteredData = globalData.filter(row => row['법정동'] && row['법정동'].trim() === selectedDong);
+                    processData(filteredData); // 필터링된 데이터 렌더링
                 }
             });
         }
@@ -138,17 +190,14 @@
             let monthlyAggregates = {};
 
             const tableBody = document.getElementById('transactionTableBody');
-            tableBody.innerHTML = ''; // Clear existing
+            tableBody.innerHTML = ''; // 테이블 초기화
 
             data.forEach(row => {
-                // Safely extract price
                 const priceStr = row['거래금액(만원)'] || '0';
                 const price = parseInt(priceStr.toString().replace(/,/g, ''), 10);
-                
-                // Safely extract date
                 const dateStr = row['거래일자'] || '';
                 
-                // Determine month key (YYYY-MM). Handles standard patterns.
+                // 월별 집계를 위한 키(YYYY-MM) 추출
                 let monthKey = "알수없음";
                 const dateMatch = dateStr.match(/(\d{4})[-.\/]?(\d{2})/);
                 if (dateMatch) {
@@ -159,7 +208,6 @@
                     prices.push(price);
                     totalCount++;
 
-                    // Aggregate for Chart
                     if (!monthlyAggregates[monthKey]) {
                         monthlyAggregates[monthKey] = { sum: 0, count: 0 };
                     }
@@ -167,7 +215,7 @@
                     monthlyAggregates[monthKey].count++;
                 }
 
-                // Append to Table
+                // 테이블 행 추가
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-gray-50 transition-colors duration-150";
                 tr.innerHTML = `
@@ -182,7 +230,7 @@
                 tableBody.appendChild(tr);
             });
 
-            // Calculate Summaries
+            // 요약 카드 계산 및 업데이트
             if (prices.length > 0) {
                 const maxPrice = Math.max(...prices);
                 const minPrice = Math.min(...prices);
@@ -192,10 +240,15 @@
                 document.getElementById('valAvgPrice').innerText = formatNumber(avgPrice);
                 document.getElementById('valMaxPrice').innerText = formatNumber(maxPrice);
                 document.getElementById('valMinPrice').innerText = formatNumber(minPrice);
+            } else {
+                // 데이터가 없을 경우 처리
+                document.getElementById('valTotalCount').innerText = '0';
+                document.getElementById('valAvgPrice').innerText = '-';
+                document.getElementById('valMaxPrice').innerText = '-';
+                document.getElementById('valMinPrice').innerText = '-';
             }
 
-            // Prepare Chart Data
-            // Sort by month ascending
+            // 차트 데이터 준비 및 렌더링
             const sortedMonths = Object.keys(monthlyAggregates).sort();
             const chartLabels = sortedMonths;
             const chartData = sortedMonths.map(month => {
@@ -205,12 +258,9 @@
             renderChart(chartLabels, chartData);
         }
 
-        let myChart = null;
-
         function renderChart(labels, data) {
             const ctx = document.getElementById('monthlyPriceChart').getContext('2d');
             
-            // Destroy existing chart if data is re-fetched
             if (myChart) {
                 myChart.destroy();
             }
@@ -222,7 +272,7 @@
                     datasets: [{
                         label: '월별 평균 거래가격 (만원)',
                         data: data,
-                        borderColor: 'rgb(37, 99, 235)', // Tailwind Blue 600
+                        borderColor: 'rgb(37, 99, 235)',
                         backgroundColor: 'rgba(37, 99, 235, 0.1)',
                         borderWidth: 2,
                         pointBackgroundColor: 'rgb(37, 99, 235)',
@@ -230,26 +280,20 @@
                         pointHoverBackgroundColor: '#fff',
                         pointHoverBorderColor: 'rgb(37, 99, 235)',
                         fill: true,
-                        tension: 0.3 // Smooth curves
+                        tension: 0.3
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: {
-                            display: false
-                        },
+                        legend: { display: false },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
                                     let label = context.dataset.label || '';
-                                    if (label) {
-                                        label += ': ';
-                                    }
-                                    if (context.parsed.y !== null) {
-                                        label += formatNumber(context.parsed.y) + ' 만원';
-                                    }
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) label += formatNumber(context.parsed.y) + ' 만원';
                                     return label;
                                 }
                             }
@@ -258,19 +302,11 @@
                     scales: {
                         y: {
                             beginAtZero: false,
-                            ticks: {
-                                callback: function(value) {
-                                    return formatNumber(value);
-                                }
-                            },
-                            grid: {
-                                color: 'rgba(0,0,0,0.05)'
-                            }
+                            ticks: { callback: function(value) { return formatNumber(value); } },
+                            grid: { color: 'rgba(0,0,0,0.05)' }
                         },
                         x: {
-                            grid: {
-                                display: false
-                            }
+                            grid: { display: false }
                         }
                     }
                 }
